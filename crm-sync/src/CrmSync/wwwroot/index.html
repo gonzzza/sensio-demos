@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CRM sync demo · Sensio Partners</title>
+  <style>
+    :root {
+      --purple: #5c2d91; --purple-deep: #2a1544; --yellow: #f3d86b; --lavender: #f5f1fb;
+      --text: #1c1a24; --muted: #5b5867; --line: #e5e3ec; --ok: #1f7a4d; --warn: #9a5b00; --bad: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; color: var(--text); background: #fff; }
+    header { background: var(--purple-deep); color: #fff; padding: 20px 32px; display: flex; justify-content: space-between; align-items: baseline; }
+    header h1 { margin: 0; font-size: 22px; }
+    header span { color: #d9cfe8; font-size: 14px; }
+    main { padding: 24px 32px 48px; display: grid; gap: 24px; max-width: 1280px; margin: 0 auto; }
+    .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .tile { background: var(--lavender); border-radius: 14px; padding: 18px 20px; }
+    .tile strong { display: block; font-size: 34px; color: var(--purple); }
+    .tile span { color: var(--muted); font-size: 14px; }
+    .tile.alert strong { color: var(--bad); }
+    .panel { border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+    .panel h2 { margin: 0 0 12px; font-size: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    button { font: inherit; font-size: 14px; font-weight: 600; border: 0; border-radius: 999px; padding: 9px 16px; cursor: pointer; background: var(--purple); color: #fff; }
+    button.secondary { background: var(--lavender); color: var(--purple); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    label { font-size: 14px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+    input[type=range] { accent-color: var(--purple); }
+    output { font-weight: 700; color: var(--text); min-width: 44px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .status { font-weight: 700; }
+    .Completed { color: var(--ok); } .Paused { color: var(--warn); } .Failed { color: var(--bad); }
+    .empty { color: var(--muted); font-size: 14px; }
+    ul.alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+    ul.alerts li { background: #fdecea; border-radius: 10px; padding: 10px 12px; }
+    ul.alerts time { color: var(--muted); font-size: 12px; display: block; }
+    #message { font-size: 14px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Billing → CRM sync</h1>
+    <span>Demo by Sensio Partners · all data is fictional</span>
+  </header>
+  <main>
+    <section class="tiles">
+      <div class="tile"><strong id="customers">–</strong><span>customers in billing</span></div>
+      <div class="tile"><strong id="contacts">–</strong><span>contacts in the CRM</span></div>
+      <div class="tile"><strong id="retries">–</strong><span>failed calls retried automatically</span></div>
+      <div class="tile" id="dlTile"><strong id="deadLetterCount">–</strong><span>records in the dead-letter queue</span></div>
+    </section>
+
+    <section class="panel">
+      <h2>Controls</h2>
+      <div class="row">
+        <button id="runNow">Run sync now</button>
+        <button id="replay" class="secondary">Replay dead letters</button>
+        <span id="message"></span>
+      </div>
+      <div class="row" style="margin-top: 14px">
+        <label>Billing API errors <input id="billingFailureRate" type="range" min="0" max="100" step="5"><output id="billingFailureRateOut"></output></label>
+        <label>CRM errors <input id="crmFailureRate" type="range" min="0" max="100" step="5"><output id="crmFailureRateOut"></output></label>
+        <label>CRM rate limit <input id="crmRequestsPerSecond" type="range" min="1" max="50" step="1"><output id="crmRequestsPerSecondOut"></output></label>
+      </div>
+      <div class="row" style="margin-top: 14px">
+        <span class="empty">Scenarios:</span>
+        <button class="secondary" data-preset="0,0,50">Healthy</button>
+        <button class="secondary" data-preset="10,10,8">Flaky (default)</button>
+        <button class="secondary" data-preset="0,90,8">CRM outage</button>
+        <button class="secondary" data-preset="100,0,8">Billing outage</button>
+      </div>
+    </section>
+
+    <div class="grid2">
+      <section class="panel">
+        <h2>Recent runs</h2>
+        <table>
+          <thead><tr><th>Started</th><th>Status</th><th class="num">Read</th><th class="num">Upserted</th><th class="num">Skipped</th><th class="num">Dead-lettered</th></tr></thead>
+          <tbody id="runs"></tbody>
+        </table>
+        <p class="empty" id="runNote"></p>
+      </section>
+      <section class="panel">
+        <h2>Alerts</h2>
+        <ul class="alerts" id="alerts"></ul>
+        <p class="empty" id="noAlerts">No alerts.</p>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Dead-letter queue</h2>
+      <table>
+        <thead><tr><th>Customer</th><th>Company</th><th>Last error</th><th class="num">Failures</th><th>Last failed</th></tr></thead>
+        <tbody id="deadLetters"></tbody>
+      </table>
+      <p class="empty" id="noDeadLetters">Empty: every change reached the CRM.</p>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const time = (iso) => iso ? new Date(iso).toLocaleTimeString() : '';
+
+    function cell(text, className) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (className) td.className = className;
+      return td;
+    }
+
+    function fillTable(tbody, rows, toCells) {
+      tbody.replaceChildren(...rows.map((r) => {
+        const tr = document.createElement('tr');
+        tr.append(...toCells(r));
+        return tr;
+      }));
+    }
+
+    let editing = false;
+    function showChaos(c) {
+      if (editing) return;
+      $('billingFailureRate').value = Math.round(c.billingFailureRate * 100);
+      $('crmFailureRate').value = Math.round(c.crmFailureRate * 100);
+      $('crmRequestsPerSecond').value = c.crmRequestsPerSecond;
+      updateOutputs();
+    }
+
+    function updateOutputs() {
+      $('billingFailureRateOut').textContent = $('billingFailureRate').value + '%';
+      $('crmFailureRateOut').textContent = $('crmFailureRate').value + '%';
+      $('crmRequestsPerSecondOut').textContent = $('crmRequestsPerSecond').value + '/s';
+    }
+
+    async function refresh() {
+      const s = await (await fetch('/api/status')).json();
+      $('customers').textContent = s.customersInBilling;
+      $('contacts').textContent = s.contactsInCrm;
+      $('retries').textContent = s.retriesAbsorbed;
+      $('deadLetterCount').textContent = s.deadLetters.length;
+      $('dlTile').classList.toggle('alert', s.deadLetters.length > 0);
+
+      fillTable($('runs'), s.runs.slice(0, 10), (r) => [
+        cell(time(r.startedAt)), cell(r.status, 'status ' + r.status),
+        cell(r.read, 'num'), cell(r.upserted, 'num'), cell(r.skipped, 'num'), cell(r.deadLettered, 'num'),
+      ]);
+      $('runNote').textContent = s.runs[0]?.note ?? (s.runs.length ? '' : 'The first run starts a few seconds after launch, then every 15 seconds.');
+
+      fillTable($('deadLetters'), s.deadLetters, (d) => [
+        cell(d.customer.id), cell(d.customer.company), cell(d.reason), cell(d.failures, 'num'), cell(time(d.lastFailedAt)),
+      ]);
+      $('noDeadLetters').hidden = s.deadLetters.length > 0;
+
+      $('alerts').replaceChildren(...s.alerts.slice(0, 6).map((a) => {
+        const li = document.createElement('li');
+        const t = document.createElement('time');
+        t.textContent = time(a.raisedAt);
+        li.append(t, a.message);
+        return li;
+      }));
+      $('noAlerts').hidden = s.alerts.length > 0;
+
+      showChaos(s.chaos);
+    }
+
+    async function post(url, body) {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      return { ok: res.ok, data: await res.json().catch(() => null), text: res.ok ? '' : await res.text().catch(() => '') };
+    }
+
+    async function withButton(button, action) {
+      button.disabled = true;
+      try { await action(); } finally { button.disabled = false; refresh(); }
+    }
+
+    $('runNow').onclick = () => withButton($('runNow'), async () => {
+      $('message').textContent = 'Running…';
+      const r = await post('/api/sync/run');
+      $('message').textContent = r.ok ? `Run ${r.data.status.toLowerCase()}: ${r.data.upserted} upserted, ${r.data.skipped} unchanged.` : 'A sync is already running.';
+    });
+
+    $('replay').onclick = () => withButton($('replay'), async () => {
+      $('message').textContent = 'Replaying…';
+      const r = await post('/api/dead-letters/replay');
+      $('message').textContent = r.ok ? `Replay: ${r.data.replayed} sent, ${r.data.stillFailing} still failing.` : 'A sync is already running.';
+    });
+
+    async function sendChaos() {
+      await post('/api/chaos', {
+        billingFailureRate: $('billingFailureRate').value / 100,
+        crmFailureRate: $('crmFailureRate').value / 100,
+        crmRequestsPerSecond: Number($('crmRequestsPerSecond').value),
+      });
+      editing = false;
+    }
+
+    for (const id of ['billingFailureRate', 'crmFailureRate', 'crmRequestsPerSecond']) {
+      $(id).oninput = () => { editing = true; updateOutputs(); };
+      $(id).onchange = sendChaos;
+    }
+
+    document.querySelectorAll('[data-preset]').forEach((b) => b.onclick = async () => {
+      const [billing, crm, rate] = b.dataset.preset.split(',').map(Number);
+      $('billingFailureRate').value = billing;
+      $('crmFailureRate').value = crm;
+      $('crmRequestsPerSecond').value = rate;
+      updateOutputs();
+      await sendChaos();
+      refresh();
+    });
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>
