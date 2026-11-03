@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CrmSync/CrmSync.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CrmSync.Tests/CrmSync.Tests.csproj" />
+  </Folder>
+</Solution>
